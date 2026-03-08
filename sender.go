@@ -25,54 +25,68 @@ func NewMessageRouter(config *Config) *MessageRouter {
 	}
 }
 
-// SendWithAction 发送消息到指定节点并指定操作类型
-func (r *MessageRouter) SendWithAction(nodeName string, message string, contentType string, messageID int64, action TelegramAction) error {
+// SendWithAction 发送消息到指定节点并指定操作类型，返回每个节点的结果
+type NodeResult struct {
+	NodeName  string `json:"node_name"`
+	MessageID int64  `json:"message_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (r *MessageRouter) SendWithAction(nodeName string, message string, contentType string, messageID int64, action TelegramAction) ([]NodeResult, error) {
 	visited := make(map[string]bool)
-	return r.sendToNodeWithAction(nodeName, message, contentType, messageID, action, visited)
+	var results []NodeResult
+	_, err := r.sendToNodeWithAction(nodeName, message, contentType, messageID, action, visited, &results)
+	return results, err
 }
 
 // sendToNodeWithAction 带操作类型的节点发送
-func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, contentType string, messageID int64, action TelegramAction, visited map[string]bool) error {
+func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, contentType string, messageID int64, action TelegramAction, visited map[string]bool, results *[]NodeResult) (int64, error) {
 	if visited[nodeName] {
 		log.Printf("检测到循环引用,跳过节点: %s", nodeName)
-		return nil
+		return 0, nil
 	}
 
 	visited[nodeName] = true
 
 	node, exists := r.config.Nodes[nodeName]
 	if !exists {
-		return fmt.Errorf("节点 %s 不存在", nodeName)
+		return 0, fmt.Errorf("节点 %s 不存在", nodeName)
 	}
 
 	nodeType := node.GetNodeType()
 	log.Printf("处理节点 %s (类型: %s)", nodeName, nodeType)
 
 	if node.Wecom != nil {
-		return sendToWecom(node.Wecom, message)
+		return 0, sendToWecom(node.Wecom, message)
 	}
 
 	if node.Telegram != nil {
 		params := &TelegramMessageParams{
 			ChatID:        node.Telegram.ChatID,
 			Text:          message,
-			ParseMode:     "", // contentType 应该在路由配置中指定，不从 HTTP Content-Type 获取
+			ParseMode:     "",
 			EnablePreview: node.Telegram.EnablePreview,
 			MessageID:     messageID,
 			Action:        action,
 		}
 
+		nodeResult := NodeResult{NodeName: node.Telegram.Name}
+
 		// 对于发送操作，保存最后的消息 ID
 		if action == TelegramActionSend {
 			msgID, err := sendToTelegram(node.Telegram, params)
 			if err != nil {
-				return err
+				nodeResult.Error = err.Error()
+				*results = append(*results, nodeResult)
+				return 0, err
 			}
 			if msgID > 0 {
 				r.lastMessageIDs[node.Telegram.ChatID] = msgID
+				nodeResult.MessageID = msgID
 				log.Printf("[%s] 已保存 message_id: %d", node.Telegram.Name, msgID)
 			}
-			return nil
+			*results = append(*results, nodeResult)
+			return msgID, nil
 		}
 
 		// 对于编辑/删除操作，优先使用传入的 messageID，其次使用缓存的
@@ -81,23 +95,30 @@ func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, co
 				params.MessageID = lastID
 				log.Printf("[%s] 使用缓存的 message_id: %d", node.Telegram.Name, lastID)
 			} else {
-				return fmt.Errorf("请提供 message_id 参数")
+				nodeResult.Error = "请提供 message_id 参数"
+				*results = append(*results, nodeResult)
+				return 0, fmt.Errorf("请提供 message_id 参数")
 			}
 		}
 
 		log.Printf("[%s] 执行 %s 操作，message_id: %d", node.Telegram.Name, action, params.MessageID)
 
 		_, err := sendToTelegram(node.Telegram, params)
+		nodeResult.MessageID = params.MessageID
+		if err != nil {
+			nodeResult.Error = err.Error()
+		}
 		// 删除成功后清除缓存
 		if err == nil && action == TelegramActionDelete {
 			delete(r.lastMessageIDs, node.Telegram.ChatID)
 			log.Printf("[%s] 删除成功，已清除缓存的 message_id", node.Telegram.Name)
 		}
-		return err
+		*results = append(*results, nodeResult)
+		return params.MessageID, err
 	}
 
 	if node.Webhook != nil {
-		return sendToWebhook(node.Webhook, message)
+		return 0, sendToWebhook(node.Webhook, message)
 	}
 
 	if node.Log != nil {
@@ -105,47 +126,56 @@ func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, co
 
 		if len(node.Log.Next) > 0 {
 			var failedNodes []string
+			var lastMsgID int64
 			for _, nextNode := range node.Log.Next {
 				visitedCopy := make(map[string]bool)
 				for k, v := range visited {
 					visitedCopy[k] = v
 				}
 
-				if err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy); err != nil {
+				msgID, err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy, results)
+				if err != nil {
 					log.Printf("发送到日志下级节点 %s 失败: %v", nextNode, err)
 					failedNodes = append(failedNodes, fmt.Sprintf("%s: %v", nextNode, err))
+				} else if msgID > 0 {
+					lastMsgID = msgID
 				}
 			}
 
 			if len(failedNodes) > 0 {
-				return fmt.Errorf("部分日志下级节点发送失败: %s", strings.Join(failedNodes, ", "))
+				return 0, fmt.Errorf("部分日志下级节点发送失败: %s", strings.Join(failedNodes, ", "))
 			}
+			return lastMsgID, nil
 		}
-		return nil
+		return 0, nil
 	}
 
 	if len(node.Next) > 0 {
 		var failedNodes []string
+		var lastMsgID int64
 		for _, nextNode := range node.Next {
 			visitedCopy := make(map[string]bool)
 			for k, v := range visited {
 				visitedCopy[k] = v
 			}
 
-			if err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy); err != nil {
+			msgID, err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy, results)
+			if err != nil {
 				log.Printf("发送到下级节点 %s 失败: %v", nextNode, err)
 				failedNodes = append(failedNodes, fmt.Sprintf("%s: %v", nextNode, err))
+			} else if msgID > 0 {
+				lastMsgID = msgID
 			}
 		}
 
 		if len(failedNodes) > 0 {
-			return fmt.Errorf("部分下级节点发送失败: %s", strings.Join(failedNodes, ", "))
+			return 0, fmt.Errorf("部分下级节点发送失败: %s", strings.Join(failedNodes, ", "))
 		}
-		return nil
+		return lastMsgID, nil
 	}
 
 	log.Printf("叶子节点 %s: 消息被丢弃", nodeName)
-	return nil
+	return 0, nil
 }
 
 func sendToWecom(config *WecomConfig, message string) error {

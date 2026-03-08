@@ -50,23 +50,24 @@ func handleWebhook(router *MessageRouter, nodeName string, nodeConfig *Node) gin
 			return
 		}
 
-		if err := router.SendWithAction(nodeName, messageContent, contentType, messageID, action); err != nil {
+		results, err := router.SendWithAction(nodeName, messageContent, contentType, messageID, action)
+		if err != nil {
 			log.Printf("操作失败: %v", err)
 			errStr := err.Error()
 
 			// 根据错误类型返回不同的 HTTP 状态码
 			switch {
 			case strings.Contains(errStr, "请提供 message_id"):
-				c.JSON(http.StatusBadRequest, gin.H{"error": errStr})
+				c.JSON(http.StatusBadRequest, gin.H{"error": errStr, "results": results})
 			case strings.Contains(errStr, "Telegram 返回错误状态"):
-				c.JSON(http.StatusBadGateway, gin.H{"error": errStr})
+				c.JSON(http.StatusBadGateway, gin.H{"error": errStr, "results": results})
 			default:
-				c.JSON(http.StatusInternalServerError, gin.H{"error": errStr})
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errStr, "results": results})
 			}
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "success"})
+		c.JSON(http.StatusOK, gin.H{"message": "success", "results": results})
 	}
 }
 
