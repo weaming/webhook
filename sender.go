@@ -104,7 +104,7 @@ func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, co
 		logMessage(node.Log, message)
 
 		if len(node.Log.Next) > 0 {
-			hasError := false
+			var failedNodes []string
 			for _, nextNode := range node.Log.Next {
 				visitedCopy := make(map[string]bool)
 				for k, v := range visited {
@@ -113,19 +113,19 @@ func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, co
 
 				if err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy); err != nil {
 					log.Printf("发送到日志下级节点 %s 失败: %v", nextNode, err)
-					hasError = true
+					failedNodes = append(failedNodes, fmt.Sprintf("%s: %v", nextNode, err))
 				}
 			}
 
-			if hasError {
-				return fmt.Errorf("部分日志下级节点发送失败")
+			if len(failedNodes) > 0 {
+				return fmt.Errorf("部分日志下级节点发送失败: %s", strings.Join(failedNodes, ", "))
 			}
 		}
 		return nil
 	}
 
 	if len(node.Next) > 0 {
-		hasError := false
+		var failedNodes []string
 		for _, nextNode := range node.Next {
 			visitedCopy := make(map[string]bool)
 			for k, v := range visited {
@@ -134,12 +134,12 @@ func (r *MessageRouter) sendToNodeWithAction(nodeName string, message string, co
 
 			if err := r.sendToNodeWithAction(nextNode, message, contentType, messageID, action, visitedCopy); err != nil {
 				log.Printf("发送到下级节点 %s 失败: %v", nextNode, err)
-				hasError = true
+				failedNodes = append(failedNodes, fmt.Sprintf("%s: %v", nextNode, err))
 			}
 		}
 
-		if hasError {
-			return fmt.Errorf("部分下级节点发送失败")
+		if len(failedNodes) > 0 {
+			return fmt.Errorf("部分下级节点发送失败: %s", strings.Join(failedNodes, ", "))
 		}
 		return nil
 	}

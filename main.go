@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -51,7 +52,17 @@ func handleWebhook(router *MessageRouter, nodeName string, nodeConfig *Node) gin
 
 		if err := router.SendWithAction(nodeName, messageContent, contentType, messageID, action); err != nil {
 			log.Printf("操作失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			errStr := err.Error()
+
+			// 根据错误类型返回不同的 HTTP 状态码
+			switch {
+			case strings.Contains(errStr, "请提供 message_id"):
+				c.JSON(http.StatusBadRequest, gin.H{"error": errStr})
+			case strings.Contains(errStr, "Telegram 返回错误状态"):
+				c.JSON(http.StatusBadGateway, gin.H{"error": errStr})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": errStr})
+			}
 			return
 		}
 
