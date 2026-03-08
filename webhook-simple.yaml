@@ -1,0 +1,64 @@
+# Webhook 服务配置文件
+---
+
+listen: 127.0.0.1:9999
+
+nodes:
+  wecom-bighand:
+    wecom:
+      name: "告警群"
+      key: "45b2ec41-xxx"
+
+  tg-trump:
+    telegram:
+      name: "川普刚刚说了什么"
+      bot_token: "8042556xxx"
+      chat_id: "-1003xxx"
+
+  tg-weaming:
+    telegram:
+      name: "私人频道"
+      bot_token: "804255xxx"
+      chat_id: "-10031xxx"
+
+  log-normal:
+    log:
+      severity: normal
+
+  log-important:
+    log:
+      severity: important
+
+  log-urgent:
+    log:
+      severity: urgent
+
+  node-trump:
+    next:
+      - log-important
+      - wecom-bighand
+      - tg-trump
+
+  tv-public:
+    next:
+      - log-normal
+      - wecom-bighand
+
+  tv-private:
+    next:
+      - log-important
+      - tg-weaming
+
+
+routes:
+  - path: /tradingview/public
+    node: tv-public
+
+  - path: /tradingview/private
+    node: tv-private
+
+  - path: /wecom
+    node: wecom-bighand
+
+  - path: /trump
+    node: node-trump

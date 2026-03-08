@@ -1,0 +1,117 @@
+# Webhook 服务配置文件
+listen: ":8080"
+
+# 节点定义（可以是外部目标或内部虚拟节点）
+nodes:
+  # 外部节点 - 企业微信
+  wecom-alerts:
+    wecom:
+      name: "告警群"
+      key: "your-wecom-webhook-key"
+
+  # 外部节点 - Telegram
+  telegram-channel:
+    telegram:
+      name: "通知频道"
+      bot_token: "your-telegram-bot-token"
+      chat_id: "your-chat-id"
+
+  # 外部节点 - 普通 Webhook
+  custom-webhook:
+    webhook:
+      url: "https://example.com/webhook"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer your-token"
+
+  # 日志节点 - 根据紧急程度分类处理
+  # 一般消息: 只记录日志
+  log-normal:
+    log:
+      severity: normal
+
+  # 重要消息: 记录日志 + 发送到企业微信
+  log-important:
+    log:
+      severity: important
+      next:
+        - wecom-alerts
+
+  # 紧急消息: 记录日志 + 发送到企业微信和 Telegram
+  log-urgent:
+    log:
+      severity: urgent
+      next:
+        - wecom-alerts
+        - telegram-channel
+
+  # 内部虚拟节点 - 示例: root -> a, b; a -> c; b -> wecom; c -> telegram
+  root:
+    next:
+      - node-a
+      - node-b
+
+  node-a:
+    next:
+      - node-c
+
+  node-b:
+    next:
+      - wecom-alerts
+
+  node-c:
+    next:
+      - telegram-channel
+
+  # 简单的广播节点
+  broadcast-all:
+    next:
+      - wecom-alerts
+      - telegram-channel
+      - custom-webhook
+
+  # 带日志的广播节点(重要级别)
+  broadcast-with-log:
+    next:
+      - log-important
+      - custom-webhook
+
+  # 叶子节点（没有 next，消息到此被丢弃）
+  blackhole:
+    {}
+
+# 路由配置
+routes:
+  # 复杂路由示例
+  - path: /complex
+    node: root
+
+  # 广播到所有目标
+  - path: /broadcast
+    node: broadcast-all
+
+  # 广播并记录日志
+  - path: /broadcast-logged
+    node: broadcast-with-log
+
+  # 直接发送到企业微信
+  - path: /wecom
+    node: wecom-alerts
+
+  # TradingView webhook
+  - path: /tradingview/public
+    node: broadcast-all
+
+  # 不同紧急程度的消息
+  - path: /alert/normal
+    node: log-normal
+
+  - path: /alert/important
+    node: log-important
+
+  - path: /alert/urgent
+    node: log-urgent
+
+  # 黑洞路由（消息被丢弃）
+  - path: /dev/null
+    node: blackhole
